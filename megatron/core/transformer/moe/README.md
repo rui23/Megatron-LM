@@ -14,27 +14,34 @@ Megatron-Core offers rich parallelism mappings, combining Expert Parallelism wit
 - **Full distributed optimizer support.**
 
 ### Router and Load Balancing
+<!-- 路由器类型：使用Top-K MLP路由器。 -->
 - Router type:
     - Top-K MLP router
+<!-- 负载均衡算法：包括Sinkhorn算法（S-BASE），以及辅助损失/负载均衡损失。 -->
 - Load Balancing algorithms:
     - Sinkhorn (S-BASE)
     - Aux loss / Load balancing loss
 
 ### Performance Optimizations
+<!-- 当本地专家数量大于1时，采用GroupedGEMM，支持bf16数据类型，这在较大规模的MoE模型中可带来性能提升。 -->
 - GroupedGEMM when num local experts > 1
     - Supported dtype: bf16
     - Performance improvements for larger MoE models
+<!-- 支持--tp-comm-overlap参数用于MoE，以优化通信和计算的重叠。 -->
 - Enable `--tp-comm-overlap` for MoE
 
+<!-- 令牌调度机制: 提供Dropless（无令牌丢弃）或有选择地进行令牌丢弃，可能带有或不带有填充至容量的选项。 -->
 ### Token Dispatch Mechanism
 - Dropless / No token drop
 - Token drop, with or without padding to capacity
 
+<!-- 易用性 1)为Mixtral模型提供了ckpt转换工具 2)分布式ckpt存储 3)每层的日志记录功能-->
 ### Ease of use
 - Checkpoint converter for Mixtral models, see the [example](https://github.com/NVIDIA/Megatron-LM/tree/main/examples/mixtral) for details.
 - Distributed checkpoining
 - Per-layer logging
 
+<!-- 即将推出的功能: 1)token排列/反排列融合 2)融合的Sinkhorn内核 3)支持FP8训练-->
 ## Upcoming features
 - Token permutation / unpermutation fusion
 - Fused Sinkhorn Kernel
@@ -172,11 +179,20 @@ MODEL_ARGS=(
 
 MOE_ARGS=(
     --num-experts 8
-    --expert-model-parallel-size 8
+    --expert-model-parallel-size 8 # 专家并行度？
     --moe-router-load-balancing-type aux_loss # options: aux_loss, sinkhorn, None. Default is aux_loss.
-    --moe-router-topk 2
-    --moe-aux-loss-coeff 1e-2
-    --moe-grouped-gemm
+    --moe-router-topk 2  # 每个token被路由到的专家数量
+    --moe-aux-loss-coeff 1e-2 # 辅助损失的缩放系数，推荐起始值为1e-2，默认为0.0
+    --moe-grouped-gemm # 每个GPU上有多于一个专家时，开启多个局部GEMM内核，以提高GroupedLinear操作的效率。
+    # --moe-z-loss-coeff: z-loss的缩放系数，推荐起始值为1e-3，默认为None。
+    # --moe-input-jitter-eps: 向输入张量添加噪声的epsilon值，默认为None。
+    # --moe-token-dispatcher-type: 令牌分发器类型，可选"allgather"或"alltoall"，默认为"allgather"。
+    # --moe-per-layer-logging: 开启每层的日志记录，目前支持辅助损失和z-loss的记录。
+    # --moe-expert-capacity-factor: 每个专家的容量因子，None表示不丢弃任何令牌，默认为None。
+    # --moe-pad-expert-input-to-capacity: 将每个专家的输入填充到容量长度，仅在设置了--moe-expert-capacity-factor后有效。
+    # --moe-token-drop-policy: 令牌丢弃策略，可选"probs"或"position"。
+    # --moe-layer-recompute: 开启moe_layer的激活重计算，当内存不足时使用。
+    # --moe-extended-tp: 实验性参数，提供专家并行的替代策略，避免MoE训练中的负载均衡问题。
 )
 
 DATA_ARGS=(
@@ -187,19 +203,19 @@ DATA_ARGS=(
 )
 
 TRAINING_ARGS=(
-    --micro-batch-size 1
-    --global-batch-size 128
-    --lr 1e-4
-    --train-iters 500000
-    --lr-decay-iters 320000
-    --lr-decay-style cosine
-    --min-lr 1.0e-5
-    --weight-decay 0.1
-    --lr-warmup-iters 500
-    --clip-grad 1.0
-    --bf16
-    --overlap-grad-reduce
-    --overlap-param-gather
+    --micro-batch-size 1 # 每个GPU上处理的数据量
+    --global-batch-size 128 # 全局批量大小
+    --lr 1e-4 # 学习率。较高的学习率会导致模型权重快速变化，但可能会导致训练不稳定；较低的学习率会使训练更加稳定，但收敛速度较慢。
+    --train-iters 500000 # 训练迭代次数
+    --lr-decay-iters 320000 # 学习率衰减迭代次数，表示学习率衰减策略应用的周期。在这个参数指定的迭代次数内，学习率会按照设定的方式逐渐降低。
+    --lr-decay-style cosine # 学习率衰减风格，决定学习率如何随训练迭代而减少，常见的有线性衰减、指数衰减、余弦衰减等。
+    --min-lr 1.0e-5 # 最小学习率，当学习率衰减到此值以下时，将不再继续衰减。
+    --weight-decay 0.1 # 权重衰减系数，用于L2正则化，防止过拟合。
+    --lr-warmup-iters 500 # 学习率预热迭代次数，在训练开始阶段缓慢增加学习率，有助于模型更好地收敛。
+    --clip-grad 1.0 # 梯度裁剪阈值，用于防止梯度爆炸，当梯度的范数超过这个阈值时，会对梯度进行缩放。
+    --bf16 # 使用bfloat16数据类型进行训练，这是一种混合精度训练策略，可以节省内存并加速训练过程。
+    --overlap-grad-reduce # 启用梯度减少和前向/后向传播之间的重叠，可以在通信和计算之间进行更好的并行化，以减少训练时间
+    --overlap-param-gather # 启用参数收集与前向/后向传播之间的重叠，与--overlap-grad-reduce类似，用于优化分布式训练中的通信和计算并行。
 )
 
 MODEL_PARALLEL_ARGS=(
